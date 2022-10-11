@@ -3,6 +3,7 @@ import torch_geometric
 from torch_geometric.nn import global_mean_pool, global_max_pool
 import torch.nn.functional as F
 from layers import SAGPool
+from torch_scatter import scatter_mean, scatter_std
 
 
 class RBFGNN(torch.nn.Module):
@@ -34,36 +35,41 @@ class RBFGNN(torch.nn.Module):
             ]
         )
 
-    def mu(self, x):
-        return torch.mean(x, 1)
+    def mu(self, x, batch):
+        return scatter_mean(x, batch.unsqueeze(1), dim=0)
 
-    def var(self, x):
-        return (1.0 / (x.shape(1) - 1)) * torch.linalg.vector_norm(
-            (x - self.mu(x)), dim=1
+    def var(self, x, batch):
+        return torch.square(scatter_std(x, batch.unsqueeze(1), dim=0))
+
+    def rbf_update(self, x, mu, var, batch):
+      counts = torch.bincount(batch)
+      mu = torch.repeat_interleave(mu, counts, dim=0)
+      var = torch.repeat_interleave(var, counts, dim=0)
+      return (1.0 / (torch.sqrt(2 * torch.pi * var) + 1e-6)) * torch.exp(
+          -0.5 * (x - mu) ** 2 / var
         )
 
-    def rbf_update(self, x, mu, var):
-        return (1.0 / torch.sqrt(2 * torch.pi * var)) * torch.exp(
-            -0.5 * (x - mu) ** 2 / var
-        )
 
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
 
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
         x = F.relu(self.conv1(x, edge_index))
         x, edge_index, _, batch, _ = self.pool1(x, edge_index, None, batch)
-        x = self.rbf_update(x, self.mu(x), self.var(x))
+        x = self.rbf_update(x, self.mu(x, batch), self.var(x, batch), batch)
         x1 = torch.cat([global_max_pool(x, batch), global_mean_pool(x, batch)], dim=1)
         
         x = F.relu(self.conv2(x, edge_index))
         x, edge_index, _, batch, _ = self.pool2(x, edge_index, None, batch)
-        x = self.rbf_update(x, self.mu(x), self.var(x))
+        x = self.rbf_update(x, self.mu(x, batch), self.var(x, batch), batch)
         x2 = torch.cat([global_max_pool(x, batch), global_mean_pool(x, batch)], dim=1)
 
         x = F.relu(self.conv3(x, edge_index))
         x, edge_index, _, batch, _ = self.pool3(x, edge_index, None, batch)
-        x = self.rbf_update(x, self.mu(x), self.var(x))
+        x = self.rbf_update(x, self.mu(x, batch), self.var(x, batch), batch)
         x3 = torch.cat([global_max_pool(x, batch), global_mean_pool(x, batch)], dim=1)
+
 
         x = x1 + x2 + x3
 
