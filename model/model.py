@@ -45,9 +45,10 @@ class RBFGNN(torch.nn.Module):
       counts = torch.bincount(batch)
       mu = torch.repeat_interleave(mu, counts, dim=0)
       var = torch.repeat_interleave(var, counts, dim=0)
-      return (1.0 / (torch.sqrt(2 * torch.pi * var) + 1e-6)) * torch.exp(
+      assert mu.shape == x.shape and var.shape == x.shape
+      return torch.nan_to_num((1.0 / (torch.sqrt(2 * torch.pi * var) + 1e-6)) * torch.exp(
           -0.5 * (x - mu) ** 2 / var
-        )
+        ))
 
 
     def forward(self, data):
